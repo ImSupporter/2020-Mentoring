@@ -20,7 +20,9 @@ import android.opengl.GLSurfaceView;
 import android.opengl.Matrix;
 import android.util.Log;
 
+import com.google.ar.core.Camera;
 import com.google.ar.core.PointCloud;
+import com.google.ar.core.Pose;
 import com.taehyun.pointcloud.Utils.ShaderUtil;
 
 import java.io.IOException;
@@ -68,6 +70,10 @@ public class PointCloudRenderer {
 
   public FloatBuffer finalPointBuffer;
   public FloatBuffer pointBuffer;
+
+  private float[] seedPoint;
+  public int seedPointID;
+  private FloatBuffer seedBuffer;
   public PointCloudRenderer() {}
 
   public void createOnGlThread(Context context) throws IOException {
@@ -253,6 +259,26 @@ public class PointCloudRenderer {
 
     ShaderUtil.checkGLError(TAG, "Draw");
   }
+  public void draw_seedPoint(float[] vpMatrix){
+    GLES20.glUseProgram(programName);
+    GLES20.glEnableVertexAttribArray(positionAttribute);
+
+    ByteBuffer bb = ByteBuffer.allocateDirect(4 * 4);
+    bb.order(ByteOrder.nativeOrder());
+    seedBuffer = bb.asFloatBuffer();
+    seedBuffer.put(seedPoint);
+    seedBuffer.position(0);
+
+    GLES20.glVertexAttribPointer(positionAttribute, 4, GLES20.GL_FLOAT, false, 16, seedBuffer);
+    GLES20.glUniformMatrix4fv(modelViewProjectionUniform, 1, false, vpMatrix, 0);
+    GLES20.glUniform1f(pointSizeUniform, 30.0f);
+    GLES20.glUniform1i(bUseSolidColor,1);
+
+    GLES20.glUniform4f(colorUniform, 1.0f, 0.0f, 0.0f, 1.0f);
+
+    GLES20.glDrawArrays(GLES20.GL_POINTS, 0, seedBuffer.remaining()/4);
+    GLES20.glDisableVertexAttribArray(positionAttribute);
+  }
   public void filterPoints(){
     for (int id : allPoints.keySet()) {
       ArrayList<float[]> list = allPoints.get(id);
@@ -339,5 +365,30 @@ public class PointCloudRenderer {
     finalPointBuffer.put(tempArray);
     finalPointBuffer.position(0);
   }
+  public void pickPoint(float[] camera, float[] ray){ //  camera: 위치(x,y,z) , ray : ray의 방향벡터
+    float thresholdDistance = 0.01f; // 10cm = 0.1m * 0.1m = 0.01f
+    seedPoint = new float[]{0, 0, 0, Float.MAX_VALUE};
 
+    for(int i = 0; i<finalPointBuffer.remaining(); i+=4){
+      float[] point = new float[] {finalPointBuffer.get(i), finalPointBuffer.get(i+1), finalPointBuffer.get(i+2), finalPointBuffer.get(i+3)};
+      float[] product = new float[]{point[0] - camera[0], point[1] - camera[1], point[2] - camera[2], 1.0f};
+
+      float distanceSq = (float)(Math.pow(product[0],2) + Math.pow(product[1],2) + Math.pow(product[2],2));// length between camera and point
+      float innerProduct = ray[0] * product[0] + ray[1] * product[1] + ray[2] * product[2];
+      distanceSq = distanceSq - (innerProduct * innerProduct);  //c^2 - a^2 = b^2
+
+      // determine candidate points
+      if(distanceSq < thresholdDistance && distanceSq < seedPoint[3]){
+        seedPoint[0] = point[0];
+        seedPoint[1] = point[1];
+        seedPoint[2] = point[2];
+        seedPoint[3] = distanceSq;
+        seedPointID = i/4;
+      }
+    }
+    Log.d("pickSeed", String.format("%.2f %.2f %.2f : %d", seedPoint[0], seedPoint[1],seedPoint[2],seedPointID));
+  }
+  public float[] getSeedArr(){
+    return new float[]{seedPoint[0], seedPoint[1], seedPoint[2],1.0f};
+  }
 }
